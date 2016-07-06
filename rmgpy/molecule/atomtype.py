@@ -479,6 +479,7 @@ def getAtomType(atom, bonds):
         sDouble = molFeatureList[4]
         triple = molFeatureList[5]
         benzene = molFeatureList[6]
+        raise AtomTypeError("Unable to determine atom type for atom {0}, which has {2}".format(atom, str(molFeatureList)))
 
-        raise AtomTypeError('Unable to determine atom type for atom {0}, which has {1:d} double bonds to C, {2:d} double bonds to O, {3:d} double bonds to S, {4:d} triple bonds, and {5:d} benzene bonds.'.format(atom, rDouble, oDouble, sDouble, triple, benzene))
+        # raise AtomTypeError('Unable to determine atom type for atom {0}, which has {1:d} double bonds to C, {2:d} double bonds to O, {3:d} double bonds to S, {4:d} triple bonds, and {5:d} benzene bonds.'.format(atom, rDouble, oDouble, sDouble, triple, benzene))
 

@@ -463,11 +463,9 @@ class KineticsRules(Database):
         # Recursively descend to the child nodes
         childrenList = [[group] for group in rootTemplate]
         for group in childrenList:
-            parent = group.pop(0)
+            parent = group[0]
             if len(parent.children) > 0:
                 group.extend(parent.children)
-            else:
-                group.append(parent)
                 
         childrenList = getAllCombinations(childrenList)
         kineticsList = []

@@ -468,6 +468,19 @@ class KineticsRules(Database):
                 group.extend(parent.children)
                 
         childrenList = getAllCombinations(childrenList)
+        
+        refinedChildrenList = []
+        for comb in childrenList:
+            isParentInCombo = False
+            for parent in rootTemplate:
+                if parent in comb:
+                    isParentInCombo = True
+                    break
+            if isParentInCombo:
+                refinedChildrenList.append(comb)
+
+        childrenList = refinedChildrenList
+
         kineticsList = []
         for template in childrenList:
             label = ';'.join([g.label for g in template])

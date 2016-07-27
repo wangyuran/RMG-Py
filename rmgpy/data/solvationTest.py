@@ -258,8 +258,15 @@ multiplicity 2
         # This will display the SMILES Parse Error message from the external function, but ignore it.
         self.assertRaises(Exception, solventlibrary.loadEntry, index=4, label='benzene', solvent=None, molecule='ring')
 
+    def testSolvationThermo(self):
+        soluteSMILES = 'CCCC'
+        solvationThermo = self.database.getSolvationThermo(soluteSMILES, 'water')
+        self.assertAlmostEqual(solvationThermo.gibbs, 9215.0, 0)
+
 #####################################################
 
 if __name__ == '__main__':
     suite = TestLoader().loadTestsFromTestCase(TestSoluteDatabase)
     TextTestRunner(verbosity=2).run(suite)
+
+

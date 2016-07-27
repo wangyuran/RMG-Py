@@ -946,3 +946,13 @@ class SolvationDatabase(object):
             else:
                 logging.info('One of the initial species must be the solvent with the same string name')
                 raise Exception('One of the initial species must be the solvent with the same string name')
+
+
+    def getSolvationThermo(self, soluteSMILES, solventName):
+
+        spc = Species().fromSMILES(soluteSMILES)
+        soluteData = self.getSoluteData(spc)
+        solventData = self.getSolventData(solventName)
+        solvationThermo = self.getSolvationCorrection(soluteData, solventData)
+
+        return solvationThermo

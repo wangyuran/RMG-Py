@@ -440,16 +440,47 @@ class KineticsRules(Database):
         
         return entries
 
-    def fillRulesByAveragingUp(self, rootTemplate, alreadyDone):
+    def fillRulesByAveragingUp(self, rootTemplate, alreadyDone, verbose=False):
         """
         Fill in gaps in the kinetics rate rules by averaging child nodes.
+        If verbose is set to True, then exact sources of kinetics are saved in the kinetics comments
+        (warning: this uses up a lot of memory due to the extensively long comments)
         """
         rootLabel = ';'.join([g.label for g in rootTemplate])
         
         if rootLabel in alreadyDone:
             return alreadyDone[rootLabel]
-        
-        # See if we already have a rate rule for this exact template 
+
+        # Generate the distance 1 pairings which must be averaged for this root template.
+        # The distance 1 template is created by taking the parent node from one or more trees
+        # and creating the combinations with children from a single remaining tree.  
+        # i.e. for some node (A,B), we want to fetch all combinations for the pairing of (A,B's children) and
+        # (A's children, B).  For node (A,B,C), we would retrieve all combinations of (A,B,C's children) 
+        # (A,B's children,C) etc...  
+        # If a particular node has no children, it is skipped from the children expansion altogether.
+
+        childrenList = []
+        for i, parent in enumerate(rootTemplate):
+            # Start with the root template, and replace the ith member with its children
+            if parent.children:
+                childrenSet = [[group] for group in rootTemplate]
+                childrenSet[i] = parent.children
+                childrenList.extend(getAllCombinations(childrenSet))
+
+        kineticsList = []
+        for template in childrenList:
+            label = ';'.join([g.label for g in template])
+            
+            if label in alreadyDone:
+                kinetics = alreadyDone[label]
+            else:
+                kinetics = self.fillRulesByAveragingUp(template, alreadyDone, verbose)
+            
+            if kinetics is not None:
+                kineticsList.append([kinetics, template])
+                
+        # See if we already have a rate rule for this exact template instead
+        # and return it now that we have finished searching its children
         entry = self.getRule(rootTemplate)
         if entry is not None and entry.rank > 0:
             # We already have a rate rule for this exact template
@@ -460,40 +491,33 @@ class KineticsRules(Database):
             alreadyDone[rootLabel] = entry.data
             return entry.data
         
-        # Recursively descend to the child nodes
-        childrenList = [[group] for group in rootTemplate]
-        for group in childrenList:
-            parent = group.pop(0)
-            if len(parent.children) > 0:
-                group.extend(parent.children)
-            else:
-                group.append(parent)
-                
-        childrenList = getAllCombinations(childrenList)
-        kineticsList = []
-        for template in childrenList:
-            label = ';'.join([g.label for g in template])
-            if template == rootTemplate: 
-                continue
-            
-            if label in alreadyDone:
-                kinetics = alreadyDone[label]
-            else:
-                kinetics = self.fillRulesByAveragingUp(template, alreadyDone)
-            
-            if kinetics is not None:
-                kineticsList.append([kinetics, template])
-        
         if len(kineticsList) > 0:
             
-            # We found one or more results! Let's average them together
-            kinetics = self.__getAverageKinetics([k for k, t in kineticsList])
             if len(kineticsList) > 1:
-                kinetics.comment += 'Average of ({0})'.format(
-                    ' + '.join(k.comment if k.comment != '' else ';'.join(g.label for g in t) for k, t in kineticsList))
+                # We found one or more results! Let's average them together
+                kinetics = self.__getAverageKinetics([k for k, t in kineticsList])
+                
+                if verbose:
+                    kinetics.comment = 'Average of [{0}]'.format(
+                         ' + '.join(k.comment if k.comment != '' else ';'.join(g.label for g in t) for k, t in kineticsList))
+                
+                else:
+                    kinetics.comment = 'Average of [{0}]'.format(
+                     ' + '.join(';'.join(g.label for g in t) for k, t in kineticsList))
+
             else:
                 k,t = kineticsList[0]
-                kinetics.comment += k.comment if k.comment != '' else ';'.join(g.label for g in t)
+                kinetics = deepcopy(k)
+                # Even though we are using just a single set of kinetics, it's still considered
+                # an average.  It just happens that the other distance 1 children had no data.
+                
+                if verbose:
+                    kinetics.comment = 'Average of [{0}]'.format(k.comment if k.comment != '' else ';'.join(g.label for g in t))
+                else:
+                    kinetics.comment = 'Average of [{0}]'.format(';'.join(g.label for g in t))
+                
+
+            
             entry = Entry(
                 index = 0,
                 label = rootLabel,
@@ -544,7 +568,25 @@ class KineticsRules(Database):
             E0 = (E0*0.001,"kJ/mol"),
         )
         return averagedKinetics
+    
+    def calculateNormDistance(self, template, otherTemplate):
+        """
+        Calculate the norm distance squared between two rate rules with
+        `template` and `otherTemplate`.  The norm distance is 
+        a^2 + b^2 + c^2 .... when a is the distance between the nodes in the
+        first tree, b is the distance between the nodes in the second tree, etc.
+        """
+        
+        # Do it the stupid way first and calculate distances from the top 
+        # rather than from each other for now... it's dumb but need to see results first
+        import numpy
+        depth = numpy.array([node.level for node in template])
+        otherDepth = numpy.array([otherNode.level for otherNode in otherTemplate])
 
+        distance = numpy.array(depth-otherDepth)
+        norm = numpy.dot(distance,distance)
+        return norm
+        
     def estimateKinetics(self, template, degeneracy=1):
         """
         Determine the appropriate kinetics for a reaction with the given
@@ -552,7 +594,7 @@ class KineticsRules(Database):
         """
         def getTemplateLabel(template):
             # Get string format of the template in the form "(leaf1,leaf2)"
-            return '({0})'.format(';'.join([g.label for g in template]))
+            return '[{0}]'.format(';'.join([g.label for g in template]))
     
         
         originalLeaves = getTemplateLabel(template)
@@ -567,7 +609,14 @@ class KineticsRules(Database):
                 kineticsList.append([kinetics, t])
             
             if len(kineticsList) > 0:                 
-                                
+                
+                if len(kineticsList) > 1:
+                    # Filter the kinetics to use templates with the lowest minimum euclidean distance 
+                    # from the specified template
+                    norms = [self.calculateNormDistance(template, t) for kinetics,t in kineticsList]
+                    minNorm = min(norms) 
+                    kineticsList = [pair for pair, norm in zip(kineticsList,norms) if norm == min(norms)]
+                    
                 if len(kineticsList) == 1:
                     kinetics, t = kineticsList[0]
                     # Check whether the exact rate rule for the original template (most specific
@@ -587,6 +636,13 @@ class KineticsRules(Database):
                 else:
                     # We found one or more results! Let's average them together
                     kinetics = self.__getAverageKinetics([k for k, t in kineticsList])
+                    # Unlike in the case of a single rule, the verbose comments for averaging are lost unless they are 
+                    # appended in the following lines.  Verbose comments are filtered out in 
+                    # rmgpy.rmg.model.CoreEdgeReactionModel.generateKinetics
+                    kinetics.comment = 'Average of [{0}]'.format(
+                         ' + '.join(k.comment if k.comment != '' else ';'.join(g.label for g in t) for k, t in kineticsList))
+                    kinetics.comment +='\n'
+                    # Append standard portion of kinetics comments that appear in non-verbose mode.
                     kinetics.comment += 'Estimated using average of templates {0}'.format(
                         ' + '.join([getTemplateLabel(t) for k, t in kineticsList]),
                     )

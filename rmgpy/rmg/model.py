@@ -43,9 +43,7 @@ import rmgpy.constants as constants
 from rmgpy.constraints import failsSpeciesConstraints
 from rmgpy.quantity import Quantity
 import rmgpy.species
-from rmgpy.thermo import Wilhoit, NASA, ThermoData
-from rmgpy.pdep import SingleExponentialDown
-from rmgpy.statmech import  Conformer
+from rmgpy.thermo.thermoengine import submit
 
 from rmgpy.data.base import ForbiddenStructureException
 from rmgpy.data.kinetics.depository import DepositoryReaction
@@ -82,168 +80,6 @@ class Species(rmgpy.species.Species):
         A helper function used when pickling an object.
         """
         return (Species, (self.index, self.label, self.thermo, self.conformer, self.molecule, self.transportData, self.molecularWeight, self.energyTransferModel, self.reactive, self.props, self.coreSizeAtCreation),)
-
-    def getThermoData(self, database, thermoClass=NASA):
-        """
-        Returns a `thermoData` object of the current Species object.
-
-        Returns the stored `thermoData` object if it is found,
-        generates a new `thermoData` object if it not found.
-        
-        """
-        if self.thermo:
-            self.processThermoData(database, self.thermo, thermoClass)
-        else:
-            self.generateThermoData(database, thermoClass)
-
-        return self.thermo
-
-    def generateThermoData(self, database, thermoClass=NASA):
-        """
-        Generates thermo data, first checking Libraries, then using either QM or Database.
-        
-        
-        The database generates the thermo data for each structure (resonance isomer),
-        picks that with lowest H298 value.
-        
-        It then calls :meth:`processThermoData`, to convert (via Wilhoit) to NASA
-        and set the E0.
-        
-        Result stored in `self.thermo` and returned.
-        """
-
-        thermo0 = database.thermo.getThermoData(self, trainingSet=None)
-        
-        return self.processThermoData(database, thermo0, thermoClass)
-
-    def processThermoData(self, database, thermo0, thermoClass=NASA):
-        """
-        Converts via Wilhoit into required `thermoClass` and sets `E0`.
-        
-        Resulting thermo is stored (`self.thermo`) and returned.
-        """
-
-        # Always convert to Wilhoit so we can compute E0
-        if isinstance(thermo0, Wilhoit):
-            wilhoit = thermo0
-        elif isinstance(thermo0, ThermoData):
-            Tdata = thermo0._Tdata.value_si
-            Cpdata = thermo0._Cpdata.value_si
-            H298 = thermo0._H298.value_si
-            S298 = thermo0._S298.value_si
-            Cp0 = thermo0._Cp0.value_si
-            CpInf = thermo0._CpInf.value_si
-            wilhoit = Wilhoit().fitToDataForConstantB(Tdata, Cpdata, Cp0, CpInf, H298, S298, B=1000.0)
-        else:
-            Cp0 = self.calculateCp0()
-            CpInf = self.calculateCpInf()
-            wilhoit = thermo0.toWilhoit(Cp0=Cp0, CpInf=CpInf)
-        wilhoit.comment = thermo0.comment
-
-        # Add on solvation correction
-        if Species.solventData and not "Liquid thermo library" in thermo0.comment:
-            #logging.info("Making solvent correction for {0}".format(Species.solventName))
-            soluteData = database.solvation.getSoluteData(self)
-            solvation_correction = database.solvation.getSolvationCorrection(soluteData, Species.solventData)
-            # correction is added to the entropy and enthalpy
-            wilhoit.S0.value_si = (wilhoit.S0.value_si + solvation_correction.entropy)
-            wilhoit.H0.value_si = (wilhoit.H0.value_si + solvation_correction.enthalpy)
-            
-        # Compute E0 by extrapolation to 0 K
-        if self.conformer is None:
-            self.conformer = Conformer()
-        self.conformer.E0 = wilhoit.E0
-        
-        # Convert to desired thermo class
-        if thermoClass is Wilhoit:
-            self.thermo = wilhoit
-        elif thermoClass is NASA:
-            if Species.solventData:
-                #if liquid phase simulation keep the nasa polynomial if it comes from a liquid phase thermoLibrary. Otherwise convert wilhoit to NASA
-                if "Liquid thermo library" in thermo0.comment and isinstance(thermo0, NASA):
-                    self.thermo = thermo0
-                    if self.thermo.E0 is None:
-                        self.thermo.E0 = wilhoit.E0
-                else:
-                    self.thermo = wilhoit.toNASA(Tmin=100.0, Tmax=5000.0, Tint=1000.0)
-            else: 
-                #gas phase with species matching thermo library keep the NASA from library or convert if group additivity
-                if "Thermo library" in thermo0.comment and isinstance(thermo0,NASA):
-                    self.thermo=thermo0
-                    if self.thermo.E0 is None:
-                        self.thermo.E0 = wilhoit.E0
-                else:
-                    self.thermo = wilhoit.toNASA(Tmin=100.0, Tmax=5000.0, Tint=1000.0)
-        else:
-            raise Exception('thermoClass neither NASA nor Wilhoit.  Cannot process thermo data.')
-        
-        if self.thermo.__class__ != thermo0.__class__:
-            # Compute RMS error of overall transformation
-            Tlist = numpy.array([300.0, 400.0, 500.0, 600.0, 800.0, 1000.0, 1500.0], numpy.float64)
-            err = 0.0
-            for T in Tlist:
-                err += (self.thermo.getHeatCapacity(T) - thermo0.getHeatCapacity(T))**2
-            err = math.sqrt(err/len(Tlist))/constants.R
-            # logging.log(logging.WARNING if err > 0.2 else 0, 'Average RMS error in heat capacity fit to {0} = {1:g}*R'.format(self, err))
-
-        return self.thermo
-
-    def generateStatMech(self, database):
-        """
-        Generate molecular degree of freedom data for the species. You must
-        have already provided a thermodynamics model using e.g.
-        :meth:`generateThermoData()`.
-        """
-        if not self.hasThermo():
-            raise Exception("Unable to determine statmech model for species {0}: No thermodynamics model found.".format(self))
-        molecule = self.molecule[0]
-        conformer = database.statmech.getStatmechData(molecule, self.thermo)
-        if self.conformer is None:
-            self.conformer = Conformer()
-        self.conformer.E0 = self.thermo.E0
-        self.conformer.modes = conformer.modes
-        self.conformer.spinMultiplicity = conformer.spinMultiplicity
-            
-    def generateTransportData(self, database):
-        """
-        Generate the transportData parameters for the species.
-        """
-        #count = sum([1 for atom in self.molecule[0].vertices if atom.isNonHydrogen()])
-        self.transportData = database.transport.getTransportProperties(self)[0]
-        
-
-        #previous method for calculating transport properties
-        '''
-        if count == 1:
-            self.transportData.sigma = (3.758e-10,"m")
-            self.transportData.epsilon = (148.6,"K")
-        elif count == 2:
-            self.transportData.sigma = (4.443e-10,"m")
-            self.transportData.epsilon = (110.7,"K")
-        elif count == 3:
-            self.transportData.sigma = (5.118e-10,"m")
-            self.transportData.epsilon = (237.1,"K")
-        elif count == 4:
-            self.transportData.sigma = (4.687e-10,"m")
-            self.transportData.epsilon = (531.4,"K")
-        elif count == 5:
-            self.transportData.sigma = (5.784e-10,"m")
-            self.transportData.epsilon = (341.1,"K")
-        else:
-            self.transportData.sigma = (5.949e-10,"m")
-            self.transportData.epsilon = (399.3,"K")
-        '''
-    
-    def generateEnergyTransferModel(self):
-        """
-        Generate the collisional energy transfer model parameters for the
-        species. This "algorithm" is *very* much in need of improvement.
-        """
-        self.energyTransferModel = SingleExponentialDown(
-            alpha0 = (300*0.011962,"kJ/mol"),
-            T0 = (300,"K"),
-            n = 0.85,
-        )
 
 ################################################################################
 
@@ -449,6 +285,7 @@ class CoreEdgeReactionModel:
         either a :class:`Molecule` object or an :class:`rmgpy.species.Species`
         object.
         """
+
         if isinstance(object, rmgpy.species.Species):
             molecule = object.molecule[0]
             label = label if label != '' else object.label
@@ -489,7 +326,9 @@ class CoreEdgeReactionModel:
         spec.coreSizeAtCreation = len(self.core.species)
         spec.generateResonanceIsomers()
         spec.molecularWeight = Quantity(spec.molecule[0].getMolecularWeight()*1000.,"amu")
-        # spec.generateTransportData(database)
+        
+        submit(spec)
+
         spec.generateEnergyTransferModel()
         formula = molecule.getFormula()
         if formula in self.speciesDict:
@@ -556,8 +395,8 @@ class CoreEdgeReactionModel:
                 else:
                     if areIdenticalSpeciesReferences(rxn, rxn0):
                         return True, rxn0
-            
-            if isinstance(familyObj, KineticsFamily) and familyObj.ownReverse:
+            if isinstance(familyObj, KineticsFamily):
+                
                 if (rxn_id == rxn_id0[::-1]):
                     if areIdenticalSpeciesReferences(rxn, rxn0):
                         return True, rxn0
@@ -695,7 +534,6 @@ class CoreEdgeReactionModel:
         and instead the algorithm proceeds to react the core species together
         to form edge reactions.
         """
-        database = rmgpy.data.rmg.database
         
         numOldCoreSpecies = len(self.core.species)
         numOldCoreReactions = len(self.core.reactions)
@@ -793,12 +631,6 @@ class CoreEdgeReactionModel:
 
         ################################################################
         # Begin processing the new species and reactions
-            
-        # Generate thermodynamics of new species
-        logging.info('Generating thermodynamics for new species...')
-        for spec in self.newSpeciesList:
-            spec.getThermoData(database)
-            spec.generateTransportData(database)
         
         # Generate kinetics of new reactions
         logging.info('Generating kinetics for new reactions...')
@@ -820,7 +652,7 @@ class CoreEdgeReactionModel:
                         if not isForward:
                             reaction.template = reaction.reverse.template
                         # We're done with the "reverse" attribute, so delete it to save a bit of memory
-                        delattr(reaction,'reverse')
+                        reaction.reverse = None
                     
         # For new reactions, convert ArrheniusEP to Arrhenius, and fix barrier heights.
         # self.newReactionList only contains *actually* new reactions, all in the forward direction.
@@ -840,7 +672,7 @@ class CoreEdgeReactionModel:
         # Update unimolecular (pressure dependent) reaction networks
         if self.pressureDependence:
             # Recalculate k(T,P) values for modified networks
-            self.updateUnimolecularReactionNetworks(database)
+            self.updateUnimolecularReactionNetworks()
             logging.info('')
             
         # Check new core and edge reactions for Chemkin duplicates
@@ -957,7 +789,7 @@ class CoreEdgeReactionModel:
         family = getFamilyLibraryObject(reaction.family)
 
         # Get the kinetics for the reaction
-        kinetics, source, entry, isForward = family.getKinetics(reaction, template=reaction.template, degeneracy=reaction.degeneracy, estimator=self.kineticsEstimator, returnAllKinetics=False)
+        kinetics, source, entry, isForward = family.getKinetics(reaction, templateLabels=reaction.template, degeneracy=reaction.degeneracy, estimator=self.kineticsEstimator, returnAllKinetics=False)
         # Get the enthalpy of reaction at 298 K
         H298 = reaction.getEnthalpyOfReaction(298)
         G298 = reaction.getFreeEnergyOfReaction(298)
@@ -968,7 +800,7 @@ class CoreEdgeReactionModel:
                 # The kinetics family is its own reverse, so we could estimate kinetics in either direction
                 
                 # First get the kinetics for the other direction
-                rev_kinetics, rev_source, rev_entry, rev_isForward = family.getKinetics(reaction.reverse, template=reaction.reverse.template, degeneracy=reaction.reverse.degeneracy, estimator=self.kineticsEstimator, returnAllKinetics=False)
+                rev_kinetics, rev_source, rev_entry, rev_isForward = family.getKinetics(reaction.reverse, templateLabels=reaction.reverse.template, degeneracy=reaction.reverse.degeneracy, estimator=self.kineticsEstimator, returnAllKinetics=False)
                 # Now decide which direction's kinetics to keep
                 keepReverse = False
                 if (entry is not None and rev_entry is None):
@@ -1203,13 +1035,13 @@ class CoreEdgeReactionModel:
             for index, spec in speciesToPrune[0:pruneDueToRateCounter]:
                 logging.info('Pruning species {0:<56}'.format(spec))
                 logging.debug('    {0:<56}    {1:10.4e}'.format(spec, maxEdgeSpeciesRateRatios[index]))
-                self.removeSpeciesFromEdge(spec)
+                self.removeSpeciesFromEdge(reactionSystems, spec)
         if len(speciesToPrune) - pruneDueToRateCounter > 0:
             logging.info('Pruning {0:d} species to obtain an edge size of {1:d} species'.format(len(speciesToPrune) - pruneDueToRateCounter, maximumEdgeSpecies))
             for index, spec in speciesToPrune[pruneDueToRateCounter:]:
                 logging.info('Pruning species {0:<56}'.format(spec))
                 logging.debug('    {0:<56}    {1:10.4e}'.format(spec, maxEdgeSpeciesRateRatios[index]))
-                self.removeSpeciesFromEdge(spec)
+                self.removeSpeciesFromEdge(reactionSystems, spec)
 
         # Delete any networks that became empty as a result of pruning
         if self.pressureDependence:
@@ -1231,13 +1063,29 @@ class CoreEdgeReactionModel:
 
         logging.info('')
 
-    def removeSpeciesFromEdge(self, spec):
+
+    def removeSpeciesFromEdge(self, reactionSystems, spec):
         """
         Remove species `spec` from the reaction model edge.
         """
 
         # remove the species
         self.edge.species.remove(spec)
+        self.indexSpeciesDict.pop(spec.index)
+
+        # clean up species references in reactionSystems
+        for reactionSystem in reactionSystems:
+            reactionSystem.speciesIndex.pop(spec)
+
+            # identify any reactions it's involved in
+            rxnList = []
+            for rxn in reactionSystem.reactionIndex:
+                if spec in rxn.reactants or spec in rxn.products:
+                    rxnList.append(rxn)
+
+            for rxn in rxnList:
+                reactionSystem.reactionIndex.pop(rxn)
+
         # identify any reactions it's involved in
         rxnList = []
         for rxn in self.edge.reactions:
@@ -1403,8 +1251,9 @@ class CoreEdgeReactionModel:
                     raise ForbiddenStructureException("Species constraints forbids species {0} from seed mechanism {1}. Please reformulate constraints, remove the species, or explicitly allow it.".format(spec.label, seedMechanism.label))
 
         for spec in self.newSpeciesList:            
-            if spec.reactive: spec.getThermoData(database)
-            spec.generateTransportData(database)
+            if spec.reactive:
+                submit(spec)
+
             self.addSpeciesToCore(spec)
 
         for rxn in self.newReactionList:
@@ -1413,7 +1262,8 @@ class CoreEdgeReactionModel:
                 # we need to make sure the barrier is positive.
                 # ...but are Seed Mechanisms run through PDep? Perhaps not.
                 for spec in itertools.chain(rxn.reactants, rxn.products):
-                    spec.getThermoData(database)
+                    submit(spec)
+
                 rxn.fixBarrierHeight(forcePositive=True)
             self.addReactionToCore(rxn)
         
@@ -1448,14 +1298,15 @@ class CoreEdgeReactionModel:
         logging.info('Adding reaction library {0} to model edge...'.format(reactionLibrary))
         reactionLibrary = database.kinetics.libraries[reactionLibrary]
 
+        # Load library reactions, keep reversibility as is
         for entry in reactionLibrary.entries.values():
             rxn = LibraryReaction(reactants=entry.item.reactants[:], products=entry.item.products[:],\
             library=reactionLibrary.label, kinetics=entry.data,\
-            duplicate=entry.item.duplicate, reversible=entry.item.reversible
+            duplicate=entry.item.duplicate, reversible=entry.item.reversible if rmg.keepIrreversible else True
             )
             r, isNew = self.makeNewReaction(rxn) # updates self.newSpeciesList and self.newReactionlist
             if not isNew: logging.info("This library reaction was not new: {0}".format(rxn))
-            
+
         # Perform species constraints and forbidden species checks
         for spec in self.newSpeciesList:
             if database.forbiddenStructures.isMoleculeForbidden(spec.molecule[0]):
@@ -1468,10 +1319,11 @@ class CoreEdgeReactionModel:
                     rmg.speciesConstraints['explicitlyAllowedMolecules'].extend(spec.molecule)
                 else:
                     raise ForbiddenStructureException("Species constraints forbids species {0} from reaction library {1}. Please reformulate constraints, remove the species, or explicitly allow it.".format(spec.label, reactionLibrary.label))
-       
+
         for spec in self.newSpeciesList:
-            if spec.reactive: spec.getThermoData(database)
-            spec.generateTransportData(database)
+            if spec.reactive: 
+                submit(spec)
+
             self.addSpeciesToEdge(spec)
 
         for rxn in self.newReactionList:
@@ -1495,7 +1347,6 @@ class CoreEdgeReactionModel:
         """
 
         logging.info('Adding reaction library {0} to output file...'.format(reactionLib))
-        database = rmgpy.data.rmg.database
         
         # Append the edge reactions that are from the selected reaction library to an output species and output reactions list
         for rxn in self.edge.reactions:
@@ -1571,7 +1422,7 @@ class CoreEdgeReactionModel:
         # Add the path reaction to that network
         network.addPathReaction(newReaction)
 
-    def updateUnimolecularReactionNetworks(self, database):
+    def updateUnimolecularReactionNetworks(self):
         """
         Iterate through all of the currently-existing unimolecular reaction
         networks, updating those that have been marked as invalid. In each update,
@@ -1610,14 +1461,14 @@ class CoreEdgeReactionModel:
                         index += 1
 
         count = sum([1 for network in self.networkList if not network.valid and not (len(network.explored) == 0 and len(network.source) > 1)])
-        logging.info('Updating {0:d} modified unimolecular reaction networks...'.format(count))
+        logging.info('Updating {0:d} modified unimolecular reaction networks (out of {1:d})...'.format(count, len(self.networkList)))
         
         # Iterate over all the networks, updating the invalid ones as necessary
         # self = reactionModel object
         updatedNetworks = []
         for network in self.networkList:
             if not network.valid:
-                network.update(self, database, self.pressureDependence)
+                network.update(self, self.pressureDependence)
                 updatedNetworks.append(network)
             
         # PDepReaction objects generated from partial networks are irreversible
@@ -1626,13 +1477,12 @@ class CoreEdgeReactionModel:
         # direction from the list of core reactions
         # Note that well-skipping reactions may not have a reverse if the well
         # that they skip over is not itself in the core
-        for network in updatedNetworks:
-            for reaction in network.netReactions:
-                try:
-                    index = self.core.reactions.index(reaction)
-                except ValueError:
-                    continue
-                for index2, reaction2 in enumerate(self.core.reactions):
+        index = 0
+        coreReactionCount = len(self.core.reactions)
+        while index < coreReactionCount:
+            reaction = self.core.reactions[index]
+            if isinstance(reaction, PDepReaction):
+                for reaction2 in self.core.reactions[index+1:]:
                     if isinstance(reaction2, PDepReaction) and reaction.reactants == reaction2.products and reaction.products == reaction2.reactants:
                         # We've found the PDepReaction for the reverse direction
                         dGrxn = reaction.getFreeEnergyOfReaction(300.)
@@ -1659,10 +1509,13 @@ class CoreEdgeReactionModel:
                             self.core.reactions.remove(reaction2)
                             self.core.reactions.insert(index, reaction2)
                             reaction2.reversible = True
+                        coreReactionCount -= 1
                         # There should be only one reverse, so we can stop searching once we've found it
                         break
                 else:
                     reaction.reversible = True
+            # Move to the next core reaction
+            index += 1
 
 
     def markChemkinDuplicates(self):
@@ -1739,7 +1592,7 @@ class CoreEdgeReactionModel:
             
         family = getFamilyLibraryObject(family_label)       
         # if the family is its own reverse (H-Abstraction) then check the other direction
-        if isinstance(family,KineticsFamily) and family.ownReverse: # (family may be a KineticsLibrary)
+        if isinstance(family,KineticsFamily): 
 
             # Get the short-list of reactions with the same family, product1 and product2
             family_label, r1_rev, r2_rev = generateReactionKey(rxn, useProducts=True)

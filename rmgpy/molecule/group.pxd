@@ -26,6 +26,7 @@
 
 from .graph cimport Vertex, Edge, Graph
 from .atomtype cimport AtomType
+cimport rmgpy.molecule.molecule as mol
 
 ################################################################################
 
@@ -41,9 +42,9 @@ cdef class GroupAtom(Vertex):
 
     cpdef __changeBond(self, short order)
 
-    cpdef __formBond(self, str order)
+    cpdef __formBond(self, float order)
 
-    cpdef __breakBond(self, str order)
+    cpdef __breakBond(self, float order)
 
     cpdef __gainRadical(self, short radical)
 
@@ -59,6 +60,14 @@ cdef class GroupAtom(Vertex):
 
     cpdef bint isSpecificCaseOf(self, Vertex other) except -2
 
+    cpdef bint isOxygen(self)
+
+    cpdef bint isSulfur(self)
+
+    cpdef bint hasWildcards(self)
+
+    cpdef mol.Atom makeSampleAtom(self)
+
 ################################################################################
 
 cdef class GroupBond(Edge):
@@ -67,13 +76,31 @@ cdef class GroupBond(Edge):
 
     cpdef Edge copy(self)
 
+    cpdef list getOrderStr(self)
+    
+    cpdef setOrderStr(self, list newOrder)
+    
+    cpdef list getOrderNum(self)
+    
+    cpdef setOrderNum(self, list newOrder)
+
     cpdef __changeBond(self, short order)
+
+    cpdef bint isSingle(self) except -2
+
+    cpdef bint isDouble(self) except -2
+
+    cpdef bint isTriple(self) except -2
+
+    cpdef bint isBenzene(self) except -2
 
     cpdef applyAction(self, list action)
 
     cpdef bint equivalent(self, Edge other) except -2
 
     cpdef bint isSpecificCaseOf(self, Edge other) except -2
+
+    cpdef makeBond(self, mol.Molecule molecule, mol.Atom atom1, mol.Atom atom2)
 
 ################################################################################
 
@@ -107,6 +134,8 @@ cdef class Group(Graph):
 
     cpdef sortAtoms(self)
 
+    cpdef list sortByConnectivity(self, list atomList)
+
     cpdef Graph copy(self, bint deep=?)
 
     cpdef clearLabeledAtoms(self)
@@ -132,3 +161,24 @@ cdef class Group(Graph):
     cpdef list findSubgraphIsomorphisms(self, Graph other, dict initialMap=?)
     
     cpdef bint isIdentical(self, Graph other)
+
+    cpdef bint isAromaticRing(self)
+
+    cpdef bint standardizeAtomType(self)
+
+    cpdef bint addExplicitLigands(self)
+
+    cpdef GroupAtom createAndConnectAtom(self, list atomtype, GroupAtom connectingAtom, list bondOrders)
+
+    cpdef bint standardizeGroup(self)
+
+    cpdef Group addImplicitAtomsFromAtomType(self)
+
+    cpdef mol.Molecule makeSampleMolecule(self)
+
+    cpdef tuple classifyBenzeneCarbons(self, dict partners=?)
+
+    cpdef Group addImplicitBenzene(self)
+
+    cpdef bint isBenzeneExplicit(self)
+

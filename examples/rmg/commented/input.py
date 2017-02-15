@@ -165,6 +165,12 @@ options(
 	#gets RMG to generate edge species chemkin files. Uses lots of memory in output.
 	#Helpful for seeing why some reaction are not appearing in core model.  
     saveEdgeSpecies=False,
+    #Sets a time limit in the form DD:HH:MM:SS after which the RMG job will stop. Useful for profiling on jobs that
+    #do not converge.
+    #wallTime = '00:00:00', 
+    keepIrreversible=False,
+    #Forces RMG to import library reactions as reversible (default). Otherwise, if set to True, RMG will import library
+    #reactions while keeping the reversibility as as.
 )
 
 # optional module allows for correction to unimolecular reaction rates at low pressures and/or temperatures.

@@ -26,12 +26,13 @@
 
 from .graph cimport Vertex, Edge, Graph
 from .atomtype cimport AtomType
-from .group cimport GroupAtom, GroupBond, Group
+cimport rmgpy.molecule.group as gr
 from .element cimport Element
 cimport rmgpy.constants as constants
 cimport numpy
 
 ################################################################################
+cdef dict bond_orders 
 
 cdef class Atom(Vertex):
 
@@ -73,18 +74,30 @@ cdef class Atom(Vertex):
     cpdef updateCharge(self)
     
     cpdef setSpinMultiplicity(self, int spinMultiplicity)
+
+    cpdef getBondOrdersForAtom(self)
     
 ################################################################################
     
 cdef class Bond(Edge):
 
-    cdef public str order
+    cdef public float order
 
     cpdef bint equivalent(self, Edge other) except -2
 
     cpdef bint isSpecificCaseOf(self, Edge other) except -2
 
+    cpdef str getOrderStr(self)
+    
+    cpdef setOrderStr(self, str newOrder)
+    
+    cpdef float getOrderNum(self)
+    
+    cpdef setOrderNum(self, float newOrder)
+
     cpdef Edge copy(self)
+    
+    cpdef bint isOrder(self, float otherOrder)
 
     cpdef bint isSingle(self) except -2
 
@@ -195,10 +208,14 @@ cdef class Molecule(Graph):
 
     cpdef double calculateCpInf(self) except -1
     
-    cpdef updateAtomTypes(self)
+    cpdef updateAtomTypes(self, logSpecies=?)
     
     cpdef bint isRadical(self) except -2
 
     cpdef int calculateSymmetryNumber(self) except -1
 
     cpdef list generateResonanceIsomers(self)
+
+    cpdef list getAromaticSSSR(Molecule mol)
+
+    cpdef list getDeterministicSmallestSetOfSmallestRings(self)

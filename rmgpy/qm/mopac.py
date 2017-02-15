@@ -4,9 +4,10 @@ import external.cclib as cclib
 import logging
 from subprocess import Popen, PIPE
 import distutils.spawn
+import tempfile
+import shutil
 
 from rmgpy.molecule import Molecule
-from qmdata import CCLibData
 from molecule import QMMolecule
 
 
@@ -20,7 +21,7 @@ class Mopac:
     inputFileExtension = '.mop'
     outputFileExtension = '.out'
     
-    executablesToTry = ('MOPAC2012.exe', 'MOPAC2009.exe', 'mopac')
+    executablesToTry = ('MOPAC2016.exe', 'MOPAC2012.exe', 'MOPAC2009.exe', 'mopac')
 
     for exe in executablesToTry:
         try:
@@ -37,7 +38,7 @@ class Mopac:
             if os.path.exists(executablePath):
                 break
         else:  # didn't break
-            executablePath = os.path.join(mopacEnv , '(MOPAC 2009 or 2012)')
+            executablePath = os.path.join(mopacEnv , '(MOPAC 2009 or 2012 or 2016)')
 
     usePolar = False #use polar keyword in MOPAC
     
@@ -75,10 +76,23 @@ class Mopac:
     def run(self):
         self.testReady()
         # submits the input file to mopac
-        process = Popen([self.executablePath, self.inputFilePath], stderr=PIPE)
+        
+        dirpath = tempfile.mkdtemp()
+        # copy input file to temp dir:
+        tempInpFile = os.path.join(dirpath, os.path.basename(self.inputFilePath))
+        shutil.copy(self.inputFilePath, dirpath)      
+
+        process = Popen([self.executablePath, tempInpFile], stderr=PIPE)
         stdout, stderr = process.communicate()  # necessary to wait for executable termination!
         if "ended normally" not in stderr.strip():
             logging.warning("Mopac error message:" + stderr)
+
+        # copy output file from temp dir to output dir:
+        tempOutFile = os.path.join(dirpath, os.path.basename(self.outputFilePath))
+        shutil.copy(tempOutFile, self.outputFilePath)
+
+        # delete temp folder:
+        shutil.rmtree(dirpath)
         return self.verifyOutputFile()
         
     def verifyOutputFile(self):
@@ -178,11 +192,11 @@ class MopacMol(QMMolecule, Mopac):
 
     #: Keywords that will be added at the top and bottom of the qm input file
     keywords = [
-                {'top':"precise nosym", 'bottom':"oldgeo thermo nosym precise "},
-                {'top':"precise nosym gnorm=0.0 nonr", 'bottom':"oldgeo thermo nosym precise "},
-                {'top':"precise nosym gnorm=0.0", 'bottom':"oldgeo thermo nosym precise "},
-                {'top':"precise nosym gnorm=0.0 bfgs", 'bottom':"oldgeo thermo nosym precise "},
-                {'top':"precise nosym recalc=10 dmax=0.10 nonr cycles=2000 t=2000", 'bottom':"oldgeo thermo nosym precise "},
+                {'top':"precise nosym THREADS=1", 'bottom':"oldgeo thermo nosym precise THREADS=1 "},
+                {'top':"precise nosym gnorm=0.0 nonr THREADS=1", 'bottom':"oldgeo thermo nosym precise THREADS=1 "},
+                {'top':"precise nosym gnorm=0.0 THREADS=1", 'bottom':"oldgeo thermo nosym precise THREADS=1 "},
+                {'top':"precise nosym gnorm=0.0 bfgs THREADS=1", 'bottom':"oldgeo thermo nosym precise THREADS=1 "},
+                {'top':"precise nosym recalc=10 dmax=0.10 nonr cycles=2000 t=2000 THREADS=1", 'bottom':"oldgeo thermo nosym precise THREADS=1 "},
                 ]
 
     def writeInputFile(self, attempt):
@@ -252,7 +266,7 @@ class MopacMol(QMMolecule, Mopac):
                 return None
         result = self.parse() # parsed in cclib
         result.source = source
-        return result # a CCLibData object
+        return result
 
 
 class MopacMolPMn(MopacMol):

@@ -21,7 +21,7 @@ from rdkit import Chem
 
 from rmgpy.molecule import element as elements
 from .molecule import Atom, Bond, Molecule
-from .adjlist import PeriodicSystem, bond_orders, ConsistencyChecker
+from .adjlist import ConsistencyChecker
 
 import rmgpy.molecule.inchi as inchiutil
 import rmgpy.molecule.util as util
@@ -311,7 +311,7 @@ def fromRDKitMol(mol, rdkitmol):
                    charge=cython.int,
                    lonePairs=cython.int,
                    number=cython.int,
-                   order=cython.str,
+                   order=cython.float,
                    atom=Atom,
                    atom1=Atom,
                    atom2=Atom,
@@ -343,14 +343,14 @@ def fromRDKitMol(mol, rdkitmol):
             rdkitatom2 = rdkitmol.GetAtomWithIdx(j + 1)
             rdkitbond = rdkitmol.GetBondBetweenAtoms(i, j)
             if rdkitbond is not None:
-                order = ''
+                order = 0
     
                 # Process bond type
                 rdbondtype = rdkitbond.GetBondType()
-                if rdbondtype.name == 'SINGLE': order = 'S'
-                elif rdbondtype.name == 'DOUBLE': order = 'D'
-                elif rdbondtype.name == 'TRIPLE': order = 'T'
-                elif rdbondtype.name == 'AROMATIC': order = 'B'
+                if rdbondtype.name == 'SINGLE': order = 1
+                elif rdbondtype.name == 'DOUBLE': order = 2
+                elif rdbondtype.name == 'TRIPLE': order = 3
+                elif rdbondtype.name == 'AROMATIC': order = 1.5
     
                 bond = Bond(mol.vertices[i], mol.vertices[j], order)
                 mol.addBond(bond)
@@ -399,15 +399,12 @@ def fromOBMol(mol, obmol):
     
     # iterate through bonds in obmol
     for obbond in openbabel.OBMolBondIter(obmol):
-        order = 0
         # Process bond type
         oborder = obbond.GetBondOrder()
-        if oborder == 1: order = 'S'
-        elif oborder == 2: order = 'D'
-        elif oborder == 3: order = 'T'
-        elif obbond.IsAromatic() : order = 'B'
+        if oborder not in [1,2,3] and obbond.IsAromatic() : 
+            oborder = 1.5
 
-        bond = Bond(mol.vertices[obbond.GetBeginAtomIdx() - 1], mol.vertices[obbond.GetEndAtomIdx() - 1], order)#python array indices start at 0
+        bond = Bond(mol.vertices[obbond.GetBeginAtomIdx() - 1], mol.vertices[obbond.GetEndAtomIdx() - 1], oborder)#python array indices start at 0
         mol.addBond(bond)
 
     
@@ -577,7 +574,7 @@ def convert_3_atom_2_bond_path(start, mol):
 
         for at in mol.atoms:
             if at.number == 8:
-                order = sum([bond_orders[b.order] for _, b in at.bonds.iteritems()])
+                order = at.getBondOrdersForAtom()
                 not_correct = order >= 4
                 if not_correct:
                     return False
@@ -768,15 +765,14 @@ def reset_lone_pairs(mol, p_indices):
     or to the default value.
 
     """
-
     for at in mol.atoms:
         index = mol.atoms.index(at) + 1 #1-based index
         count = p_indices.count(index)
         if count != 0:
             at.lonePairs = count
         else:    
-            order = sum([bond_orders[b.order] for _,b in mol.getBonds(at).iteritems()])
-            at.lonePairs = (PeriodicSystem.valence_electrons[at.symbol] - order - at.radicalElectrons - at.charge) / 2
+            order = at.getBondOrdersForAtom()
+            at.lonePairs = (elements.PeriodicSystem.valence_electrons[at.symbol] - order - at.radicalElectrons - at.charge) / 2
 
 def fix_unsaturated_bond_to_biradical(mol, inchi, u_indices):
     """
